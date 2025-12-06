@@ -1,5 +1,6 @@
 from PyQt6.QtCore import QPointF, QPoint
 import math
+import numpy as np
 from typing import Callable
 
 class Point:
@@ -108,7 +109,7 @@ class Junction:
 
 
 class Road:
-    """ Represents an Edge connecting two Intersections """
+    """ Represents an Edge connecting two Junctions """
     def __init__(self, id:str, start: Junction, end: Junction, capacity: int, lanes: int, speed: int, blocked: bool):
         self.id = id
         self.end: Junction = end
@@ -134,6 +135,7 @@ class Road:
         self.lane_capacity: int = self.capacity // self.n_lanes
         self.speed: int = speed
         self._is_blocked: bool = blocked
+        self.cars: list[Car] = []
     
     @property
     def best_lane(self) -> int:
@@ -145,7 +147,7 @@ class Road:
     
     @property
     def car_count(self) -> int:
-        return sum(self.lanes_count)
+        return len(self.cars)
 
     def block(self) -> None:
         self._is_blocked = True
@@ -171,12 +173,28 @@ class Road:
         offset_dist = lane_offset_scale * self.lane_width
         return self.start_pos + (self.perp_vector * offset_dist)
     
+    def add_car(self, car) -> int:
+        if self.car_count < self.capacity:
+            self.cars.append(car)
+            lane = self.best_lane
+            self.lanes_count[lane] += 1
+            return lane
+        else:
+            return None
+
+    def remove_car(self, car_id: str):
+        for i in range(len(self.cars)):
+            if self.cars[i].id == car_id:
+                self.cars.pop(i)
+                return 
+    
     def __repr__(self):
         return self.id
 
     
 class Car:
-    def __init__(self, spawn: Junction, strategy_callback: Callable[[Junction], Road]):
+    def __init__(self, car_id:str,  spawn: Junction, strategy_callback: Callable[[Junction], Road]):
+        self.id: str = car_id
         self.junction: Junction = spawn
         self.delete: bool = False
         self.pos: Point = self.junction.pos
@@ -192,33 +210,40 @@ class Car:
         if self.delete or not self.road:
             return
 
-        dist_to_travel = dt * self.road.speed
+        speed_factor = self.congestion_scalar(self._calculate_distances())
+        current_speed = self.road.speed * speed_factor
+        
+        dist_to_travel = dt * current_speed
         
         if self.road_progress + dist_to_travel >= self.road.length:
             excess_distance = (self.road_progress + dist_to_travel) - self.road.length
             
+            old_road = self.road
+            old_road.remove_car(self.id)
+            old_road.change_lane_count(self.lane_idx, -1)
+            
             self.junction = self.road.end
-            self.road.change_lane_count(self.lane_idx, -1) 
             self.resolve_junction()
             
             if self.delete:
                 return
 
             self.road_progress = excess_distance
-            
             self.road_progress = min(self.road_progress, self.road.length)
         else:
             self.road_progress += dist_to_travel
 
         if self.road_progress > 0: 
             target_lane = self.road.best_lane
-            if target_lane != self.lane_idx:
+            if (target_lane != self.lane_idx) and \
+               (self.road.lanes_count[target_lane] + 1 < self.road.lanes_count[self.lane_idx]):
                 self.road.change_lane_count(self.lane_idx, target_lane)
                 self.lane_idx = target_lane
 
         point_on_center_line = self.road.start_pos + (self.road.unit_vector * self.road_progress)
+        
         target_offset = self.lane_idx - (self.road.n_lanes - 1) / 2.0
-        self.visual_lane_offset += (target_offset - self.visual_lane_offset) * 0.1 # smoothing factor
+        self.visual_lane_offset += (target_offset - self.visual_lane_offset) * 0.1
 
         lane_offset_vec = self.road.perp_vector * (self.visual_lane_offset * self.road.lane_width)
         self.pos = point_on_center_line + lane_offset_vec
@@ -226,13 +251,59 @@ class Car:
     def resolve_junction(self):
         new_road = self.strategy_callback(self.junction)
         
-        if new_road and new_road.start_pos:
-            self.road = new_road
-            self.angle = new_road.angle
-            self.lane_idx = self.road.best_lane
-            self.road.change_lane_count(-1, self.lane_idx) 
-           
-        else:
-            self.delete = True
+        if new_road:
+            assigned_lane = new_road.add_car(self)
+            if assigned_lane is not None:
+                self.road = new_road
+                self.angle = new_road.angle
+                self.lane_idx = assigned_lane
+                self.visual_lane_offset = self.lane_idx - (self.road.n_lanes - 1) / 2.0
+                # Note: add_car already incremented the lane count, so we don't do it here
+                return
 
+        self.delete = True
+
+    def congestion_scalar(self, distances: list[float]) -> float:
+        """
+        Calculates a speed factor [0.0 - 1.0].
+        Input: List of distances (gap) to cars ahead.
+        """
+        if not distances:
+            return 1.0
+            
+        top_closest = distances[:5]
+        
+        # User Formula: 1 - ((1/distance) * 10) -> 1 - (10/distance)
+        # This implies:
+        # Distance 10 -> 1 - 1 = 0.0 (Stop)
+        # Distance 20 -> 1 - 0.5 = 0.5 (Half Speed)
+        # Distance 100 -> 1 - 0.1 = 0.9 (Fast)
+        
+        scalars = []
+        for d in top_closest:
+            safe_d = max(0.1, d)
+            val = 1.0 - (10.0 / safe_d)
+            scalars.append(max(0.0, min(1.0, val)))
+            
+        return sum(scalars) / len(scalars)
+
+    def _calculate_distances(self) -> list[float]:
+        """ Returns list of GAPS (in pixels) to cars ahead in the same lane """
+        distances = []
+        
+        for car in self.road.cars:
+            if car is self:
+                continue
+
+            if car.lane_idx != self.lane_idx:
+                continue
+
+            # Check if car is ahead
+            if car.road_progress > self.road_progress:
+                gap = car.road_progress - self.road_progress
+
+                real_gap = max(0, gap - 25) 
+                distances.append(real_gap)
+
+        return sorted(distances)
   

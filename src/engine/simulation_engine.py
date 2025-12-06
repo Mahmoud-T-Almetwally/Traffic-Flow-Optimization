@@ -24,6 +24,8 @@ class SimulationEngine:
             "default": self.default_strategy
         }
 
+        self.paused: bool = True
+
     def create_junction(self, x: float, y: float):
         pos = Point(x, y)
         junction_id = f"JUNC_{int(x)}_{int(y)}"
@@ -61,8 +63,7 @@ class SimulationEngine:
             return
         
         strategy_fn = self.strategies.get(strategy_name, self.default_strategy)
-        
-        new_car = Car(self.junctions[spawn_junction_id], strategy_fn)
+        new_car = Car(f"Car-{len(self.cars)}", self.junctions[spawn_junction_id], strategy_fn)
         
         new_car.resolve_junction()
         
@@ -75,11 +76,19 @@ class SimulationEngine:
         if not available_roads:
             return None
         return random.choice(available_roads)
+    
+    def start(self):
+        self.paused = False
+
+    def pause(self):
+        self.paused = True
 
     def update(self, dt=0.033):
-        for i in range(len(self.cars) - 1, -1, -1):
-            car = self.cars[i]
-            car.move(dt)
-            
-            if car.delete:
-                self.cars.pop(i)
+        if not self.paused:
+
+            for i in range(len(self.cars) - 1, -1, -1):
+                car = self.cars[i]
+                car.move(dt)
+                
+                if car.delete:
+                    self.cars.pop(i)

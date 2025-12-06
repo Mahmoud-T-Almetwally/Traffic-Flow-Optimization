@@ -75,6 +75,7 @@ class TestTrafficEngine(unittest.TestCase):
         
         # Update for 1 second
         dt = 1.0
+        self.engine.start()
         self.engine.update(dt)
         
         # Expected: Start(0,0) + Speed(50)*Time(1) = 50
@@ -91,6 +92,7 @@ class TestTrafficEngine(unittest.TestCase):
         self.engine.spawn_car("JUNC_0_0")
         
         # Move 1 second (travels 20 units, road is 10) -> Should finish
+        self.engine.start()
         self.engine.update(1.0)
         
         self.assertEqual(len(self.engine.cars), 0, "Car was not garbage collected at dead end")
@@ -116,6 +118,7 @@ class TestTrafficEngine(unittest.TestCase):
         
         # Action: Move 1.1 seconds @ 100 speed = 110 units distance.
         # Road 1 is only 100 units long.
+        self.engine.start()
         self.engine.update(1.1)
         
         # Check 1: Did we switch roads?
@@ -151,9 +154,7 @@ class TestTrafficEngine(unittest.TestCase):
         start_node.add_outgoing(r1)
         start_node.add_outgoing(r2)
         
-        # Artificially fill Road 1
-        r1.lanes_count[0] = 5
-        r2.lanes_count[0] = 0
+        r1.cars = [Car(f"CAR-{i}", start_node, road_with_least_cars) for i in range(5)]
         
         # Test Strategy
         chosen_road = road_with_least_cars(start_node)
@@ -169,7 +170,7 @@ class TestTrafficEngine(unittest.TestCase):
         road.lanes_count[0] = 5 # Capacity is 10/2 = 5 per lane. Lane 0 is FULL.
         road.lanes_count[1] = 0 # Empty
         
-        car = Car(start, lambda j: road)
+        car = Car("Car-000", start, lambda j: road)
         car.road = road
         car.lane_idx = 0 # Force car onto full lane
         
