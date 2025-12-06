@@ -1,0 +1,85 @@
+import random
+from engine.components import Point, Car, Road, Junction
+from engine.optimization_strategies import (
+    least_accessed_road, 
+    most_lanes_road, 
+    road_with_least_cars, 
+    highest_capacity_road, 
+    rotate_roads
+)
+from typing import Callable
+
+class SimulationEngine:
+    def __init__(self):
+        self.junctions: dict[str, Junction] = {}
+        self.roads: dict[str, Road] = {}
+        self.cars: list[Car] = []
+        
+        self.strategies: dict[str, Callable[[Junction], Road]] = {
+            "least_accessed_road": least_accessed_road,
+            "road_with_least_cars": road_with_least_cars,
+            "rotate_roads": rotate_roads,
+            "most_lanes_road": most_lanes_road,
+            "highest_capacity_road": highest_capacity_road,
+            "default": self.default_strategy
+        }
+
+    def create_junction(self, x: float, y: float):
+        pos = Point(x, y)
+        junction_id = f"JUNC_{int(x)}_{int(y)}"
+        
+        if junction_id not in self.junctions:
+            self.junctions[junction_id] = Junction(junction_id, pos)
+        return junction_id
+
+    def create_road(self, start_junc_id: str, end_junc_id: str, props: dict):
+        start_junc = self.junctions.get(start_junc_id)
+        end_junc = self.junctions.get(end_junc_id)
+        
+        if not start_junc or not end_junc:
+            print(f"Error: Junctions {start_junc_id} or {end_junc_id} not found.")
+            return
+
+        road_id = f"ROAD_{start_junc_id}_TO_{end_junc_id}"
+        
+        if road_id in self.roads:
+            return
+
+        capacity = props.get('capacity', 10)
+        lanes = props.get('lanes', 1)
+        speed = props.get('speed', 50)
+        blocked = props.get('blocked', False)
+
+        new_road = Road(road_id, start_junc, end_junc, capacity, lanes, speed, blocked)
+        
+        start_junc.add_outgoing(new_road)
+        end_junc.add_incoming(new_road)
+        self.roads[road_id] = new_road
+
+    def spawn_car(self, spawn_junction_id: str, strategy_name: str = "default"):
+        if spawn_junction_id not in self.junctions:
+            return
+        
+        strategy_fn = self.strategies.get(strategy_name, self.default_strategy)
+        
+        new_car = Car(self.junctions[spawn_junction_id], strategy_fn)
+        
+        new_car.resolve_junction()
+        
+        if new_car.road:
+            self.cars.append(new_car)
+
+    def default_strategy(self, junction: Junction) -> Road | None:
+        """ Picks a random available road """
+        available_roads = [r for r in junction.out_roads if r.available]
+        if not available_roads:
+            return None
+        return random.choice(available_roads)
+
+    def update(self, dt=0.033):
+        for i in range(len(self.cars) - 1, -1, -1):
+            car = self.cars[i]
+            car.move(dt)
+            
+            if car.road is None:
+                self.cars.pop(i)
