@@ -81,5 +81,5 @@ class SimulationEngine:
             car = self.cars[i]
             car.move(dt)
             
-            if car.road is None:
+            if car.delete:
                 self.cars.pop(i)

@@ -178,49 +178,61 @@ class Road:
 class Car:
     def __init__(self, spawn: Junction, strategy_callback: Callable[[Junction], Road]):
         self.junction: Junction = spawn
-        self.pos = self.junction.pos
+        self.delete: bool = False
+        self.pos: Point = self.junction.pos
         self.road: Road = None
         self.angle: float = 0
         self.road_progress: float = 0
         self.lane_idx: int = 0
+        self.visual_lane_offset:float = 0.0
         self.strategy_callback: Callable[[Junction], Road] = strategy_callback
 
-    def move(self, dt:float):
-        if not self.road:
-            self.resolve_junction()
+        
+    def move(self, dt: float):
+        if self.delete or not self.road:
             return
 
-        dist_travelled = dt * self.road.speed
-        self.road_progress += dist_travelled
-
-        if self.road_progress >= self.road.length:
+        dist_to_travel = dt * self.road.speed
+        
+        if self.road_progress + dist_to_travel >= self.road.length:
+            excess_distance = (self.road_progress + dist_to_travel) - self.road.length
+            
             self.junction = self.road.end
             self.road.change_lane_count(self.lane_idx, -1) 
             self.resolve_junction()
-            return
-
-        target_lane = self.road.best_lane
-        if target_lane != self.lane_idx:
             
-            if self.road.lanes_count[target_lane] < self.road.lane_capacity:
+            if self.delete:
+                return
+
+            self.road_progress = excess_distance
+            
+            self.road_progress = min(self.road_progress, self.road.length)
+        else:
+            self.road_progress += dist_to_travel
+
+        if self.road_progress > 0: 
+            target_lane = self.road.best_lane
+            if target_lane != self.lane_idx:
                 self.road.change_lane_count(self.lane_idx, target_lane)
                 self.lane_idx = target_lane
 
         point_on_center_line = self.road.start_pos + (self.road.unit_vector * self.road_progress)
+        target_offset = self.lane_idx - (self.road.n_lanes - 1) / 2.0
+        self.visual_lane_offset += (target_offset - self.visual_lane_offset) * 0.1 # smoothing factor
 
-        lane_offset_scale = self.lane_idx - (self.road.n_lanes - 1) / 2.0
-        lane_offset_vec = self.road.perp_vector * (lane_offset_scale * self.road.lane_width)
-        
+        lane_offset_vec = self.road.perp_vector * (self.visual_lane_offset * self.road.lane_width)
         self.pos = point_on_center_line + lane_offset_vec
-    
-    def set_strategy(self, new_strategy_callback: Callable[[Junction], Road]):
-        self.strategy_callback = new_strategy_callback
 
     def resolve_junction(self):
         new_road = self.strategy_callback(self.junction)
+        
         if new_road and new_road.start_pos:
             self.road = new_road
+            self.angle = new_road.angle
             self.lane_idx = self.road.best_lane
             self.road.change_lane_count(-1, self.lane_idx) 
-            self.road_progress = 0
-            self.pos = self.road.get_lane_start_offset(self.lane_idx)
+           
+        else:
+            self.delete = True
+
+  
