@@ -1,50 +1,55 @@
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QGraphicsView, QGraphicsScene
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QPainter, QBrush, QColor
-
+from PyQt6.QtCore import Qt, pyqtSignal, QPoint
+from PyQt6.QtGui import QPainter, QBrush, QColor, QWheelEvent
 from ui.visuals import RoadVisual, JunctionVisual, CarVisual
-from engine.simulation_engine import SimulationEngine
-from engine.components import Car
-
 
 class RoadDashboard(QWidget):
+    # Signal to tell the sidebar something was clicked: (type, object)
+    selection_changed = pyqtSignal(object) 
+
     def __init__(self):
         super().__init__()
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
         
         self.scene = QGraphicsScene()
+        self.scene.setSceneRect(-5000, -5000, 10000, 10000)
         self.scene.setBackgroundBrush(QBrush(QColor("#1e1e1e")))
+        self.scene.selectionChanged.connect(self.on_scene_selection)
         
-        self.view = QGraphicsView(self.scene)
-        self.view.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.view.setStyleSheet("border: none;")
+        self.view = InteractiveGraphicsView(self.scene)
         self.view.setRenderHint(QPainter.RenderHint.Antialiasing)
-        self.view.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         
         layout.addWidget(self.view)
         self.setLayout(layout)
+        
+        self.car_items = {} 
 
-        self.car_items: dict[Car, CarVisual] = {} 
+    def on_scene_selection(self):
+        """ Handle item selection from the scene """
+        selected_items = self.scene.selectedItems()
+        if not selected_items:
+            self.selection_changed.emit(None)
+            return
 
-    def draw_static_map(self, engine: SimulationEngine):
-        """ Called once at startup to draw roads and junctions """
+        # Pick the first selected item to display in sidebar
+        item = selected_items[0]
+        if isinstance(item, RoadVisual):
+            self.selection_changed.emit(item.road)
+        elif isinstance(item, JunctionVisual):
+            self.selection_changed.emit(item.junction)
+
+    def draw_static_map(self, engine):
         self.scene.clear()
         self.car_items = {}
-
         for road in engine.roads.values():
-            visual = RoadVisual(road)
-            self.scene.addItem(visual)
-
+            self.scene.addItem(RoadVisual(road))
         for junction in engine.junctions.values():
-            visual = JunctionVisual(junction)
-            self.scene.addItem(visual)
+            self.scene.addItem(JunctionVisual(junction))
 
-    def update_dynamic_agents(self, engine: SimulationEngine):
-        """ Called every frame to update cars """
-        
+    def update_dynamic_agents(self, engine):
         active_cars = set(engine.cars)
-        
+
         for car in engine.cars:
             if car not in self.car_items:
                 visual = CarVisual(car)
@@ -57,3 +62,25 @@ class RoadDashboard(QWidget):
         for c in dead_cars:
             self.scene.removeItem(self.car_items[c])
             del self.car_items[c]
+
+class InteractiveGraphicsView(QGraphicsView):
+    """ Custom View to handle Zooming and Panning """
+    def __init__(self, scene):
+        super().__init__(scene)
+        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        
+        # Anchor zoom to mouse position
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+
+    def wheelEvent(self, event: QWheelEvent):
+        """ Zoom In/Out """
+        zoom_in_factor = 1.15
+        zoom_out_factor = 1 / zoom_in_factor
+
+        if event.angleDelta().y() > 0:
+            self.scale(zoom_in_factor, zoom_in_factor)
+        else:
+            self.scale(zoom_out_factor, zoom_out_factor)

@@ -38,6 +38,18 @@ class MainWindow(QMainWindow):
         
         main_layout.addWidget(splitter)
         
+        self.sidebar.pause_toggled.connect(self.toggle_pause_engine)
+        self.sidebar.sim_speed_changed.connect(self.update_sim_speed)
+        self.sidebar.strategy_changed.connect(self.update_spawning_strategy)
+        self.sidebar.road_block_toggled.connect(self.toggle_road_block)
+        
+        # 2. Connect Sidebar Inspector Signals
+        self.sidebar.road_speed_changed.connect(self.apply_road_speed)
+        self.sidebar.road_capacity_changed.connect(self.apply_road_capacity)
+        
+        # 3. Connect View Selection to Sidebar
+        self.road_view.selection_changed.connect(self.sidebar.update_context_view)
+
         # 2. Setup Simulation Engine
         self.engine = SimulationEngine()
         self.bootstrap_test_map() # Create some roads
@@ -45,14 +57,13 @@ class MainWindow(QMainWindow):
         # 3. Initial Draw
         self.road_view.draw_static_map(self.engine)
         
+        self.current_strategy_name = "default"
+
         # 4. Setup Game Loop Timer
         self.timer = QTimer()
         self.timer.timeout.connect(self.game_loop)
         self.timer.start(30) # 30ms ~ 33 FPS
-        
-        # 5. Connect Sidebar Signals
-        self.sidebar.btn_pause.clicked.connect(self.toggle_pause)
-        # Initialize sidebar with engine state
+
         self.engine.paused = False # Start running
 
     def game_loop(self):
@@ -69,15 +80,42 @@ class MainWindow(QMainWindow):
         import random
         if random.randint(0, 50) == 0:
             if self.engine.junctions:
-                # Pick a random junction to spawn
                 j_id = random.choice(list(self.engine.junctions.keys()))
                 self.engine.spawn_car(j_id, "default")
 
-    def toggle_pause(self):
+    def toggle_pause_engine(self):
         if self.engine.paused:
             self.engine.start()
         else:
             self.engine.pause()
+
+    def toggle_road_block(self, road_id: str, should_block: bool):
+        if road_id in self.engine.roads:
+            road = self.engine.roads[road_id]
+            if should_block:
+                road.block()
+                print(f"Road {road_id} BLOCKED")
+            else:
+                road.unblock()
+                print(f"Road {road_id} UNBLOCKED")
+            
+            self.road_view.scene.update()
+
+    def update_sim_speed(self, val):
+        self.engine.set_simulation_speed(val)
+
+    def update_spawning_strategy(self, strat_name):
+        self.current_strategy_name = strat_name
+
+    def apply_road_speed(self, road_id, new_speed):
+        if road_id in self.engine.roads:
+            self.engine.roads[road_id].speed = new_speed
+
+    def apply_road_capacity(self, road_id, new_cap):
+        if road_id in self.engine.roads:
+            self.engine.roads[road_id].capacity = new_cap
+            self.engine.roads[road_id].lane_capacity = new_cap // self.engine.roads[road_id].n_lanes
+            print(f"Updated {road_id} capacity to {new_cap}")
 
     def bootstrap_test_map(self):
         """ Hardcoded map for testing """

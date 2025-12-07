@@ -8,7 +8,7 @@ class DataDashboard(QWidget):
         
         label = QLabel("Real-time Heatmaps & Graphs Area")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        label.setStyleSheet("background-color: #222; color: white; border: 1px solid #444;")
+        label.setStyleSheet("background-color: #222; color: white;")
         
         layout.addWidget(label)
         self.setLayout(layout)
