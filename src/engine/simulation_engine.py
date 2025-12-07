@@ -25,6 +25,7 @@ class SimulationEngine:
         }
 
         self.paused: bool = True
+        self.simulation_speed_modifier: float = 1
 
     def create_junction(self, x: float, y: float):
         pos = Point(x, y)
@@ -83,12 +84,16 @@ class SimulationEngine:
     def pause(self):
         self.paused = True
 
+    def set_simulation_speed(self, value: float):
+        self.simulation_speed_modifier = value
+
     def update(self, dt=0.033):
         if not self.paused:
-
+            elapsed = dt * self.simulation_speed_modifier
             for i in range(len(self.cars) - 1, -1, -1):
                 car = self.cars[i]
-                car.move(dt)
+                car.move(elapsed)
                 
                 if car.delete:
                     self.cars.pop(i)
+                    self.roads[car.road.id].remove_car(car.id)

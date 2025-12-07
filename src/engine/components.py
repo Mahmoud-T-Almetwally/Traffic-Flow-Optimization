@@ -273,12 +273,6 @@ class Car:
             
         top_closest = distances[:5]
         
-        # User Formula: 1 - ((1/distance) * 10) -> 1 - (10/distance)
-        # This implies:
-        # Distance 10 -> 1 - 1 = 0.0 (Stop)
-        # Distance 20 -> 1 - 0.5 = 0.5 (Half Speed)
-        # Distance 100 -> 1 - 0.1 = 0.9 (Fast)
-        
         scalars = []
         for d in top_closest:
             safe_d = max(0.1, d)
