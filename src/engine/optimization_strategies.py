@@ -1,6 +1,7 @@
 from engine.components import Junction, Road
 
-def least_accessed_road(junction: Junction) -> Road:
+
+def least_accessed_road(junction: Junction, goal_junction: Junction) -> Road:
     """
     Picks the Least Accessed Road, i.e.
     Road 1, access times: 123
@@ -12,15 +13,14 @@ def least_accessed_road(junction: Junction) -> Road:
     if not junction.out_roads:
         return None
     
-    min_access = min(junction.access_times)
-    idx = junction.access_times.index(min_access)
-    
-    # Increment the access counter for this road
-    junction.access_times[idx] += 1
-    
-    return junction.out_roads[idx]
+    candidates = [road for road in junction.out_roads if road.can_reach(goal_junction)]
 
-def road_with_least_cars(junction: Junction) -> Road:
+    if not candidates:
+        return None
+    
+    return min(candidates, key=lambda r: r.access_times) 
+
+def road_with_least_cars(junction: Junction, goal_junction: Junction) -> Road:
     """ 
     Picks the Road with the least car count, i.e.
     Road 1, car count = 1
@@ -32,31 +32,15 @@ def road_with_least_cars(junction: Junction) -> Road:
     if not junction.out_roads:
         return None
     
-    return min(junction.out_roads, key=lambda r: r.car_count)
-    
+    candidates = [road for road in junction.out_roads if road.can_reach(goal_junction)]
 
-def rotate_roads(junction: Junction) -> Road:
-    """ 
-    Picks the Road with the next index in the dictionary, i.e.
-    Road 1, index = 0
-    Road 2, index = 1
-    Road 3, index = 2
-    
-    this strategy would pick Road 2 (assuming current index = 0).
-    """
-    if not junction.out_roads:
+    if not candidates:
         return None
     
-    current_idx = junction.current_road_idx
-    road = junction.out_roads[current_idx]
-
-    # Update index for next time (Modulo to loop back to 0)
-    junction.current_road_idx = (current_idx + 1) % len(junction.out_roads)
-    
-    return road
+    return min(candidates, key=lambda r: r.car_count)
     
 
-def most_lanes_road(junction: Junction) -> Road:
+def most_lanes_road(junction: Junction, goal_junction: Junction) -> Road:
     """ 
     Picks the Road with the most lane count, i.e.
     Road 1, lane count = 1
@@ -68,10 +52,15 @@ def most_lanes_road(junction: Junction) -> Road:
     if not junction.out_roads:
         return None
     
-    return max(junction.out_roads, key=lambda r: r.n_lanes)
+    candidates = [road for road in junction.out_roads if road.can_reach(goal_junction)]
+
+    if not candidates:
+        return None
+    
+    return max(candidates, key=lambda r: r.n_lanes)
     
 
-def highest_capacity_road(junction: Junction) -> Road:
+def highest_capacity_road(junction: Junction, goal_junction: Junction) -> Road:
     """ 
     Picks the Road with the highest car capacity, i.e.
     Road 1, car capacity = 1
@@ -83,4 +72,9 @@ def highest_capacity_road(junction: Junction) -> Road:
     if not junction.out_roads:
         return None
     
-    return max(junction.out_roads, key=lambda r: r.capacity)
+    candidates = [road for road in junction.out_roads if road.can_reach(goal_junction)]
+
+    if not candidates:
+        return None
+    
+    return max(candidates, key=lambda r: r.capacity)

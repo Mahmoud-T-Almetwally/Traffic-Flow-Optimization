@@ -1,4 +1,4 @@
-from PyQt6.QtCore import QPointF, QPoint
+from PyQt6.QtCore import QPointF, QPoint, QTimer
 import math
 import numpy as np
 from typing import Callable
@@ -89,9 +89,7 @@ class Junction:
         self.in_roads: list[Road] = []
         self.out_roads: list[Road] = []
 
-        # Optimization Strategy Parameters
         self.current_road_idx: int = 0
-        self.access_times: list[int] = [0] * len(self.out_roads)
     
     def update_pos(self, new_pos: Point):
         self.pos = new_pos
@@ -101,7 +99,6 @@ class Junction:
 
     def add_outgoing(self, road):
         self.out_roads.append(road)
-        self.access_times += [0]
 
     def __repr__(self):
         return self.id
@@ -110,7 +107,7 @@ class Junction:
 
 class Road:
     """ Represents an Edge connecting two Junctions """
-    def __init__(self, id:str, start: Junction, end: Junction, capacity: int, lanes: int, speed: int, blocked: bool):
+    def __init__(self, id:str, start: Junction, end: Junction, capacity: int, lanes: int, speed: int, blocked: bool, go_duration: float = 10, stop_duration: float = 5):
         self.id = id
         self.end: Junction = end
         self.start_pos: Point = start.pos
@@ -135,6 +132,11 @@ class Road:
         self.lane_capacity: int = self.capacity // self.n_lanes
         self.speed: int = speed
         self._is_blocked: bool = blocked
+        self.stopped: bool = False
+        self.stop_duration: float = stop_duration
+        self.go_duration: float = go_duration
+        self.light_timer: float = 0.0
+        self.access_times: int = 0
         self.cars: list[Car] = []
     
     @property
@@ -148,6 +150,19 @@ class Road:
     @property
     def car_count(self) -> int:
         return len(self.cars)
+    
+    def update_lights(self, dt: float):
+        """ Called by SimulationEngine to cycle lights based on Simulation Time """
+        self.light_timer += dt
+        
+        if self.stopped:
+            if self.light_timer >= self.stop_duration:
+                self.stopped = False 
+                self.light_timer = 0.0
+        else:
+            if self.light_timer >= self.go_duration:
+                self.stopped = True 
+                self.light_timer = 0.0
 
     def block(self) -> None:
         self._is_blocked = True
@@ -174,82 +189,164 @@ class Road:
         return self.start_pos + (self.perp_vector * offset_dist)
     
     def add_car(self, car) -> int:
-        if self.car_count < self.capacity:
-            self.cars.append(car)
-            lane = self.best_lane
-            self.lanes_count[lane] += 1
-            return lane
-        else:
-            return None
+        """ Adds car, increments count, returns assigned lane. """
+        self.cars.append(car)
+        self.access_times += 1
+        lane = self.best_lane
+        self.lanes_count[lane] += 1
+        return lane
 
     def remove_car(self, car_id: str):
         for i in range(len(self.cars)):
             if self.cars[i].id == car_id:
                 self.cars.pop(i)
-                return 
+                return
+
+    def get_space_at_start(self, lane_idx: int) -> float:
+        """ 
+        Returns the distance (pixels) from the start of the road 
+        to the rear bumper of the last car in the specified lane. 
+        Returns Road Length if empty.
+        """
+        min_progress = self.length
+        found = False
+        
+        for car in self.cars:
+            if car.lane_idx == lane_idx:
+                if car.road_progress < min_progress:
+                    min_progress = car.road_progress
+                    found = True
+        
+        if not found:
+            return float(self.length)
+        
+        return max(0.0, min_progress - 15.0)
+    
+    def can_reach(self, target_node: Junction) -> bool:
+        """ BFS to check if a path exists """
+        if self.end == target_node:
+            return True
+            
+        visited = {self.end}
+        queue = [self.end]
+        
+        while queue:
+            current = queue.pop(0)
+            if current == target_node:
+                return True
+            
+            for road in current.out_roads:
+                next_node = road.end
+                if next_node not in visited:
+                    visited.add(next_node)
+                    queue.append(next_node)
+                    
+        return False
     
     def __repr__(self):
         return self.id
 
     
 class Car:
-    def __init__(self, car_id:str,  spawn: Junction, strategy_callback: Callable[[Junction], Road]):
+    def __init__(self, car_id:str,  spawn: Junction, goal: Junction,strategy_callback: Callable[[Junction, Junction], Road]):
         self.id: str = car_id
         self.junction: Junction = spawn
         self.delete: bool = False
         self.pos: Point = self.junction.pos
+        self.goal: Junction = goal
         self.road: Road = None
         self.angle: float = 0
         self.road_progress: float = 0
         self.lane_idx: int = 0
         self.visual_lane_offset:float = 0.0
-        self.strategy_callback: Callable[[Junction], Road] = strategy_callback
+        self.strategy_callback: Callable[[Junction, Junction], Road] = strategy_callback
+        self.collision_streak: int = 0
 
         
     def move(self, dt: float):
         if self.delete or not self.road:
             return
 
-        speed_factor = self.congestion_scalar(self._calculate_distances())
-        current_speed = self.road.speed * speed_factor
+        dist_to_obstacle = self._dist_to_obstacle
+
+        braking_factor = 1.0
+        SAFE_BRAKING_DIST = 60.0
         
-        dist_to_travel = dt * current_speed
+        if dist_to_obstacle < SAFE_BRAKING_DIST:
+            ratio = dist_to_obstacle / SAFE_BRAKING_DIST
+            braking_factor = max(0.0, ratio * ratio)
         
+        target_speed = self.road.speed * braking_factor
+        
+        if dist_to_obstacle < 5.0:
+            target_speed = 0.0
+
+        dist_to_travel = dt * target_speed
+
+        max_physical_move = max(0.0, dist_to_obstacle - 2.0)
+        dist_to_travel = min(dist_to_travel, max_physical_move)
+
         if self.road_progress + dist_to_travel >= self.road.length:
-            excess_distance = (self.road_progress + dist_to_travel) - self.road.length
             
-            old_road = self.road
-            old_road.remove_car(self.id)
-            old_road.change_lane_count(self.lane_idx, -1)
+            if self.road.stopped:
+                self.road_progress = min(self.road_progress + dist_to_travel, self.road.length - 1.0)
+                self._update_visual_pos()
+                return
             
-            self.junction = self.road.end
-            self.resolve_junction()
-            
-            if self.delete:
+            if self.road.end == self.goal:
+                old_road = self.road
+                old_road.remove_car(self.id)
+                old_road.change_lane_count(self.lane_idx, -1)
+                self.road = None
+                self.delete = True
                 return
 
-            self.road_progress = excess_distance
-            self.road_progress = min(self.road_progress, self.road.length)
+            excess = (self.road_progress + dist_to_travel) - self.road.length
+            
+            next_road = self.strategy_callback(self.junction, self.goal)
+
+            if next_road:
+                target_lane = next_road.best_lane
+                space_on_next_road = next_road.get_space_at_start(target_lane)
+                
+                if space_on_next_road < (excess + 15.0):
+                    self.road_progress = self.road.length - 1.0
+                    self._update_visual_pos()
+                    return
+
+                old_road = self.road
+                old_road.remove_car(self.id)
+                old_road.change_lane_count(self.lane_idx, -1)
+
+                self.junction = self.road.end
+                
+                self.road = next_road
+                self.lane_idx = self.road.add_car(self)
+                self.angle = self.road.angle
+                
+                self.road_progress = excess
+                self.visual_lane_offset = self.lane_idx - (self.road.n_lanes - 1) / 2.0
+            else:
+                old_road = self.road
+                old_road.remove_car(self.id)
+                old_road.change_lane_count(self.lane_idx, -1)
+                
+                self.road = None 
+                self.delete = True
+                return 
         else:
             self.road_progress += dist_to_travel
 
-        if self.road_progress > 0: 
-            target_lane = self.road.best_lane
-            if (target_lane != self.lane_idx) and \
-               (self.road.lanes_count[target_lane] + 1 < self.road.lanes_count[self.lane_idx]):
-                self.road.change_lane_count(self.lane_idx, target_lane)
-                self.lane_idx = target_lane
+        target_lane = self.road.best_lane
+        if self._safe_to_change_lanes(target_lane, target_speed, self.road_progress + dist_to_travel):
+            self.road.change_lane_count(self.lane_idx, target_lane)
+            self.lane_idx = target_lane
 
-        point_on_center_line = self.road.start_pos + (self.road.unit_vector * self.road_progress)
-        
-        target_offset = self.lane_idx - (self.road.n_lanes - 1) / 2.0
-        self.visual_lane_offset += (target_offset - self.visual_lane_offset) * 0.1
-
-        lane_offset_vec = self.road.perp_vector * (self.visual_lane_offset * self.road.lane_width)
-        self.pos = point_on_center_line + lane_offset_vec
+        self._update_visual_pos()
 
     def resolve_junction(self):
-        new_road = self.strategy_callback(self.junction)
+        """ Only called on spawn to place car initially """
+        new_road = self.strategy_callback(self.junction, self.goal)
         
         if new_road:
             assigned_lane = new_road.add_car(self)
@@ -258,46 +355,119 @@ class Car:
                 self.angle = new_road.angle
                 self.lane_idx = assigned_lane
                 self.visual_lane_offset = self.lane_idx - (self.road.n_lanes - 1) / 2.0
-                # Note: add_car already incremented the lane count, so we don't do it here
                 return
 
         self.delete = True
+        self.road = None
 
-    def congestion_scalar(self, distances: list[float]) -> float:
+    def _pick_best_road(self) -> Road | None:
         """
-        Calculates a speed factor [0.0 - 1.0].
-        Input: List of distances (gap) to cars ahead.
+        Greedy Best-First Search:
+        Selects outgoing road with lowest Score = (Strategy Cost + Heuristic).
         """
-        if not distances:
-            return 1.0
-            
-        top_closest = distances[:5]
+        best_road = None
+        min_score = float('inf')
         
-        scalars = []
-        for d in top_closest:
-            safe_d = max(0.1, d)
-            val = 1.0 - (10.0 / safe_d)
-            scalars.append(max(0.0, min(1.0, val)))
+        for road in self.junction.out_roads:
+            if road._is_blocked:
+                continue
             
-        return sum(scalars) / len(scalars)
+            try:
+                edge_cost = self.strategy_callback(road) or 0
+            except:
+                edge_cost = 0
 
-    def _calculate_distances(self) -> list[float]:
-        """ Returns list of GAPS (in pixels) to cars ahead in the same lane """
-        distances = []
+            # 2. Heuristic: Euclidean Distance to Goal
+            # We scale distance down (e.g. /100) so it balances with small integer weights like 'car count'
+            dist_to_goal = road.end_pos.distance_to(self.goal.pos)
+            heuristic = dist_to_goal / 100.0 
+            
+            score = edge_cost + heuristic
+            
+            if score < min_score:
+                min_score = score
+                best_road = road
+                
+        return best_road
+
+    def _update_visual_pos(self):
+        point_on_center_line = self.road.start_pos + (self.road.unit_vector * self.road_progress)
+        target_offset = self.lane_idx - (self.road.n_lanes - 1) / 2.0
+        self.visual_lane_offset += (target_offset - self.visual_lane_offset) * 0.1
+        lane_offset_vec = self.road.perp_vector * (self.visual_lane_offset * self.road.lane_width)
+        self.pos = point_on_center_line + lane_offset_vec
+
+    def _safe_to_change_lanes(self, target_lane, target_speed, future_progress):
+        """ 
+        Checks if the target lane is free at the FUTURE position. 
+        """
+        
+        if (target_lane == self.lane_idx) or (self.road.lanes_count[target_lane] + 1 >= self.road.lanes_count[self.lane_idx]):
+            return False
+
+        if not (20 < self.road_progress < self.road.length - 20):
+               return False
+
+        if self._dist_to_obstacle < 45:
+            return False
+
+        if np.isclose(0.0, target_speed, atol=0.1):
+            return False
+
+        buffer = 45.0 
         
         for car in self.road.cars:
-            if car is self:
-                continue
+            if car is self: continue
+            if car.lane_idx != target_lane: continue
 
-            if car.lane_idx != self.lane_idx:
-                continue
+            dist_diff = car.road_progress - future_progress
+            
+            if abs(dist_diff) < buffer:
+                return False
+            
+        return True
 
-            # Check if car is ahead
+    @property
+    def _dist_to_obstacle(self) -> float:
+        """ 
+        Calculates available space ahead, transparently looking across junctions.
+        """
+        closest_gap = 10000.0
+        CAR_LENGTH = 25.0 
+        
+        for car in self.road.cars:
+            if car is self: continue
+            if car.lane_idx != self.lane_idx: continue
+
             if car.road_progress > self.road_progress:
-                gap = car.road_progress - self.road_progress
+                raw_dist = car.road_progress - self.road_progress
+                gap = raw_dist - CAR_LENGTH
+                if gap < closest_gap:
+                    closest_gap = gap
 
-                real_gap = max(0, gap - 25) 
-                distances.append(real_gap)
+        if self.road.end == self.goal:
+            return closest_gap
+        
+        dist_to_end = self.road.length - self.road_progress
+        
+        if dist_to_end < closest_gap:
+            
+            if self.road.stopped:
+                return max(0.0, dist_to_end)
+            
+            next_road = self.strategy_callback(self.junction, self.goal)
 
-        return sorted(distances)
-  
+            
+            if next_road:
+                
+                if next_road._is_blocked:
+                    return closest_gap
+                
+                next_lane_space = next_road.get_space_at_start(next_road.best_lane)
+                
+                combined_gap = dist_to_end + next_lane_space
+                
+                if combined_gap < closest_gap:
+                    closest_gap = combined_gap
+
+        return max(0.0, closest_gap)
