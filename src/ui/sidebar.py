@@ -8,6 +8,7 @@ class ControlSidebar(QWidget):
     sim_speed_changed = pyqtSignal(float)
     pause_toggled = pyqtSignal()
     strategy_changed = pyqtSignal(str)
+    map_changed = pyqtSignal(str)
     
     road_speed_changed = pyqtSignal(str, int)
     road_capacity_changed = pyqtSignal(str, int)
@@ -42,32 +43,49 @@ class ControlSidebar(QWidget):
 
     def create_sim_controls(self):
         group = QGroupBox("Global Simulation")
-        group.setStyleSheet("QGroupBox { font-weight: bold; border: 1px solid #444; margin-top: 20px; } QGroupBox::title { subcontrol-origin: margin; color:black; left: 10px; padding: 0 3px; }")
+        group.setStyleSheet("QGroupBox { font-weight: bold; border: 1px solid #444; margin-top: 20px; } QGroupBox::title { subcontrol-origin: margin; color:#ccc; left: 10px; padding: 0 3px; }")
         layout = QVBoxLayout()
         
-        # Pause Button
+        # --- Map Selection ---
+        layout.addWidget(QLabel("Select Map:"))
+        self.combo_map = QComboBox()
+        self.combo_map.addItems([
+            "The Grid (Pathfinding Test)", 
+            "Highway with Bypass", 
+            "Dual Carriageway Loop"
+        ])
+        self.combo_map.currentTextChanged.connect(self.map_changed.emit)
+        layout.addWidget(self.combo_map)
+        
+        # Pause
         self.btn_pause = QPushButton("Pause Simulation")
         self.btn_pause.setStyleSheet("background-color: #d32f2f; color: white; padding: 5px; border-radius: 4px;")
         self.btn_pause.setCheckable(True)
         self.btn_pause.clicked.connect(self.toggle_pause_visuals)
         self.btn_pause.clicked.connect(self.pause_toggled.emit)
         
-        # Speed Slider
+        # Speed
         self.lbl_speed = QLabel("Time Scale: 1.0x")
         self.slider_speed = QSlider(Qt.Orientation.Horizontal)
         self.slider_speed.setRange(1, 100)
         self.slider_speed.setValue(50)
         self.slider_speed.valueChanged.connect(self.update_speed_label)
+
+        # Time Labels
+        self.lbl_time_sim = QLabel("Sim Time: 0.00s")
+        self.lbl_time_real = QLabel("Real Time: 0.00s")
         
-        # Global Strategy
+        # Strategy
         self.combo_strat = QComboBox()
-        self.combo_strat.addItems(["default", "least_accessed_road", "road_with_least_cars", "rotate_roads"])
+        self.combo_strat.addItems(["default", "least_accessed_road", "road_with_least_cars", "most_lanes_road", "highest_capacity_road"])
         self.combo_strat.currentTextChanged.connect(self.strategy_changed.emit)
 
         layout.addWidget(self.btn_pause)
         layout.addWidget(self.lbl_speed)
         layout.addWidget(self.slider_speed)
-        layout.addWidget(QLabel("Global Spawning Strategy:"))
+        layout.addWidget(self.lbl_time_sim)
+        layout.addWidget(self.lbl_time_real)
+        layout.addWidget(QLabel("Global Optimization Strategy:"))
         layout.addWidget(self.combo_strat)
         group.setLayout(layout)
         self.main_layout.addWidget(group)

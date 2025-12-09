@@ -1,10 +1,11 @@
 from PyQt6.QtWidgets import (QMainWindow, QTabWidget, QWidget, 
                              QHBoxLayout, QSplitter)
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QElapsedTimer
 
 from ui.sidebar import ControlSidebar
 from ui.road_view import RoadDashboard
 from ui.data_view import DataDashboard
+from ui.maps import MapLoader
 from engine.simulation_engine import SimulationEngine
 
 class MainWindow(QMainWindow):
@@ -34,54 +35,87 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self.sidebar)
         splitter.addWidget(self.tabs)
-        splitter.setSizes([250, 950])
+        splitter.setSizes([280, 920])
         
         main_layout.addWidget(splitter)
         
+        # Connect Sidebar Signals
         self.sidebar.pause_toggled.connect(self.toggle_pause_engine)
         self.sidebar.sim_speed_changed.connect(self.update_sim_speed)
-        self.sidebar.strategy_changed.connect(self.update_spawning_strategy)
+        self.sidebar.strategy_changed.connect(self.update_optimization_strategy)
         self.sidebar.road_block_toggled.connect(self.toggle_road_block)
+        self.sidebar.map_changed.connect(self.change_map) # <--- Map Switching
         
-        # 2. Connect Sidebar Inspector Signals
         self.sidebar.road_speed_changed.connect(self.apply_road_speed)
         self.sidebar.road_capacity_changed.connect(self.apply_road_capacity)
         
-        # 3. Connect View Selection to Sidebar
         self.road_view.selection_changed.connect(self.sidebar.update_context_view)
 
-        # 2. Setup Simulation Engine
+        # 2. Setup Engine & Map
         self.engine = SimulationEngine()
-        self.bootstrap_test_map() # Create some roads
-        
-        # 3. Initial Draw
-        self.road_view.draw_static_map(self.engine)
+        self.current_map_name = "The Grid (Pathfinding Test)"
+        self.load_current_map()
         
         self.current_strategy_name = "default"
-
-        # 4. Setup Game Loop Timer
+        
         self.timer = QTimer()
         self.timer.timeout.connect(self.game_loop)
-        self.timer.start(30) # 30ms ~ 33 FPS
+        self.timer.start(16) # ~60 FPS target (Update loop runs faster for smoothness)
 
-        self.engine.paused = False # Start running
+        self.engine.paused = False
+
+    def load_current_map(self):
+        """ Resets engine and loads the selected map """
+        # Pause to prevent update errors during reload
+        was_paused = self.engine.paused
+        self.engine.pause()
+        
+        # Create fresh engine instance to ensure total cleanup
+        # (Alternatively, you could write a engine.clear() method)
+        new_engine = SimulationEngine()
+        
+        new_engine.paused = True # Start paused while loading
+        
+        # Load Map Logic
+        MapLoader.load_map(new_engine, self.current_map_name)
+        
+        # Replace engine reference
+        self.engine = new_engine
+        
+        # Reset View
+        self.road_view.draw_static_map(self.engine)
+        self.sidebar.update_context_view(None) # Clear inspector
+        
+        if not was_paused:
+            self.engine.paused = False
+
+    def change_map(self, map_name):
+        self.current_map_name = map_name
+        self.load_current_map()
 
     def game_loop(self):
-        """ Main Simulation Loop """
-        # 1. Update Physics
-        # dt is fixed at 0.033 for now, later you can use actual delta time
-        self.engine.update(dt=0.05) 
+        """ Main Simulation Loop using Real Delta Time """
         
-        # 2. Update Visuals
+        dt = 0.05
+
+        # Update Engine
+        self.engine.update(dt)
+        
+        # Update UI Labels
+        self.sidebar.lbl_time_real.setText(f"Real Time: {self.engine.real_elapsed_time:.1f}s")
+        self.sidebar.lbl_time_sim.setText(f"Sim Time: {self.engine.sim_elapsed_time:.1f}s")
+        
+        # Update Visuals
         self.road_view.update_dynamic_agents(self.engine)
         
-        # 3. Simple Spawner for testing
-        # Spawn a car every ~100 frames
+        # Spawner Logic (Weighted by simulation speed to stay consistent)
         import random
-        if random.randint(0, 50) == 0:
-            if self.engine.junctions:
+        # Spawn chance relative to dt. E.g., 1 car per ~2 seconds
+        if not self.engine.paused and self.engine.junctions:
+            spawn_chance = dt * self.engine.simulation_speed_modifier * 0.5 
+            if random.random() < spawn_chance:
                 j_id = random.choice(list(self.engine.junctions.keys()))
-                self.engine.spawn_car(j_id, "default")
+                self.engine.spawn_car(j_id, strategy_name=self.current_strategy_name)
 
     def toggle_pause_engine(self):
         if self.engine.paused:
@@ -94,18 +128,15 @@ class MainWindow(QMainWindow):
             road = self.engine.roads[road_id]
             if should_block:
                 road.block()
-                print(f"Road {road_id} BLOCKED")
             else:
                 road.unblock()
-                print(f"Road {road_id} UNBLOCKED")
-            
             self.road_view.scene.update()
 
     def update_sim_speed(self, val):
         self.engine.set_simulation_speed(val)
 
-    def update_spawning_strategy(self, strat_name):
-        self.current_strategy_name = strat_name
+    def update_optimization_strategy(self, strat_name):
+        self.engine.set_optimization_strategy(strat_name)
 
     def apply_road_speed(self, road_id, new_speed):
         if road_id in self.engine.roads:
@@ -115,24 +146,3 @@ class MainWindow(QMainWindow):
         if road_id in self.engine.roads:
             self.engine.roads[road_id].capacity = new_cap
             self.engine.roads[road_id].lane_capacity = new_cap // self.engine.roads[road_id].n_lanes
-            print(f"Updated {road_id} capacity to {new_cap}")
-
-    def bootstrap_test_map(self):
-        """ Hardcoded map for testing """
-        # Triangle Loop
-        j1 = self.engine.create_junction(100, 100)
-        j2 = self.engine.create_junction(500, 100)
-        j3 = self.engine.create_junction(300, 400)
-        
-        # Connect them
-        props = {"capacity": 10, "speed": 100, "lanes": 2}
-        
-        # Clockwise
-        self.engine.create_road(j1, j2, props)
-        self.engine.create_road(j2, j3, props)
-        self.engine.create_road(j3, j1, props)
-        
-        # Counter-Clockwise (Two-way roads)
-        # self.engine.create_road(j2, j1, props)
-        # self.engine.create_road(j3, j2, props)
-        # self.engine.create_road(j1, j3, props)

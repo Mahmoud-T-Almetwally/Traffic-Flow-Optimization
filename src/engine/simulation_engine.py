@@ -24,8 +24,8 @@ class SimulationEngine:
 
         self.paused: bool = True
         self.simulation_speed_modifier: float = 1
-        self.sim_time_elapsed: float = 0.0
-        self.real_time_elapsed: float = 0.0
+        self.sim_elapsed_time: float = 0.0
+        self.real_elapsed_time: float = 0.0
 
     def create_junction(self, x: float, y: float):
         pos = Point(x, y)
@@ -98,10 +98,17 @@ class SimulationEngine:
     def set_simulation_speed(self, value: float):
         self.simulation_speed_modifier = value
 
+    def set_optimization_strategy(self, strategy_name):
+        if strategy_name in self.strategies:
+            strategy = self.strategies[strategy_name]
+            for car in self.cars:
+                car.strategy_callback = strategy
+
     def update(self, dt=0.033):
         if not self.paused:
+            self.real_elapsed_time += dt
             elapsed = dt * self.simulation_speed_modifier
-
+            self.sim_elapsed_time += elapsed
             for road in self.roads.values():
                 road.update_lights(elapsed)
 
